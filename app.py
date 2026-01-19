@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 
 import ml_report as ml
@@ -399,18 +401,98 @@ def format_table_br(df: pd.DataFrame) -> pd.DataFrame:
 # -------------------------
 # App
 # -------------------------
+def render_pareto_chart(df):
+    """Gera um gráfico de Pareto para a Receita das Campanhas."""
+    if df is None or df.empty or "Receita" not in df.columns:
+        return
+    
+    df_sorted = df.sort_values("Receita", ascending=False).copy()
+    df_sorted["Receita_Cum_Pct"] = 100 * df_sorted["Receita"].cumsum() / df_sorted["Receita"].sum()
+    
+    fig = go.Figure()
+    
+    # Barras de Receita
+    fig.add_trace(go.Bar(
+        x=df_sorted["Nome"],
+        y=df_sorted["Receita"],
+        name="Receita",
+        marker_color="#3483fa"
+    ))
+    
+    # Linha de Percentual Acumulado
+    fig.add_trace(go.Scatter(
+        x=df_sorted["Nome"],
+        y=df_sorted["Receita_Cum_Pct"],
+        name="% Acumulado",
+        yaxis="y2",
+        line=dict(color="#ffe600", width=3),
+        mode="lines+markers"
+    ))
+    
+    fig.update_layout(
+        title="Análise de Pareto: Receita por Campanha",
+        xaxis=dict(title="Campanha", showticklabels=False),
+        yaxis=dict(title="Receita (R$)"),
+        yaxis2=dict(title="% Acumulado", overlaying="y", side="right", range=[0, 110]),
+        template="plotly_dark",
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_treemap_chart(df):
+    """Gera um Treemap mostrando Investimento por Campanha, agrupado por Quadrante e colorido por ROAS."""
+    if df is None or df.empty or "Investimento" not in df.columns:
+        return
+    
+    df_plot = df[df["Investimento"] > 0].copy()
+    
+    # Preparar dados para o Treemap
+    df_plot["ROAS_Real"] = pd.to_numeric(df_plot.get("ROAS_Real", 0), errors="coerce").fillna(0)
+    df_plot["Quadrante"] = df_plot.get("Quadrante", "SEM_CLASSIFICACAO")
+    
+    # Criar figura com Treemap usando path e values
+    fig = px.treemap(
+        df_plot,
+        path=["Quadrante", "Nome"],
+        values="Investimento",
+        color="ROAS_Real",
+        color_continuous_scale="RdYlGn",
+        title="Alocacao de Investimento por Campanha (Tamanho = Investimento, Cor = ROAS)",
+        template="plotly_dark",
+        color_continuous_midpoint=5,
+        hover_name="Nome"
+    )
+    
+    fig.update_traces(textposition="middle center", textfont_size=10)
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20),
+        coloraxis_colorbar=dict(title="ROAS")
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
 def main():
-    st.set_page_config(page_title="Mercado Livre Ads", layout="wide")
-    st.title("Mercado Livre Ads - Dashboard e Relatório")
+    # Carregar CSS customizado
+    try:
+        with open(".streamlit/style.css") as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning("Arquivo de estilo não encontrado. O dashboard será exibido com o tema padrão.")
+    st.set_page_config(page_title="Mercado Livre Ads", layout="wide", initial_sidebar_state="expanded")
+    st.title("📊 Mercado Livre Ads - Dashboard e Relatório")
 
     with st.sidebar:
         st.caption(f"Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         st.divider()
 
         st.subheader("Arquivos")
-        organico_file = st.file_uploader("Relatório de Desempenho de Vendas (Excel)", type=["xlsx"])
-        patrocinados_file = st.file_uploader("Relatório Anúncios Patrocinados (Excel)", type=["xlsx"])
-        campanhas_file = st.file_uploader("Relatório de Campanha (Excel)", type=["xlsx"])
+        organico_file = st.file_uploader("Relatorio de Desempenho de Vendas (Excel)", type=["xlsx"])
+        patrocinados_file = st.file_uploader("Relatorio Anuncios Patrocinados (Excel)", type=["xlsx"])
+        campanhas_file = st.file_uploader("Relatorio de Campanha (Excel)", type=["xlsx"])
+        
+        st.divider()
+        st.subheader("Comparativo (Opcional)")
+        snapshot_file = st.file_uploader("Snapshot de Referencia (Excel)", type=["xlsx"], help="Arquivo gerado ha 15 dias para comparar evolucao")
 
         st.divider()
         st.subheader("Filtros de regra")
@@ -419,21 +501,21 @@ def main():
         enter_conv_min_pct = st.number_input(
             "Entrar em Ads: conversão mín (%)",
             min_value=0.0,
-            value=5.0,
+            value=3.0,
             step=0.5,
             format="%.2f",
         )
         pause_invest_min = st.number_input(
             "Pausar: investimento mín (R$)",
             min_value=0.0,
-            value=100.0,
-            step=50.0,
+            value=20.0,
+            step=10.0,
             format="%.2f",
         )
         pause_cvr_max_pct = st.number_input(
             "Pausar: CVR máx (%)",
             min_value=0.0,
-            value=1.0,
+            value=1.5,
             step=0.5,
             format="%.2f",
         )
@@ -480,16 +562,30 @@ def main():
     # -------------------------
     # KPIs
     # -------------------------
-    st.subheader("KPIs")
+    st.header("Indicadores Chave de Performance (KPIs)")
     cols = st.columns(4)
 
-    cols[0].metric("Investimento Ads", fmt_money_br(float(kpis.get("Investimento Ads (R$)", 0))))
-    cols[1].metric("Receita Ads", fmt_money_br(float(kpis.get("Receita Ads (R$)", 0))))
-    cols[2].metric("ROAS", fmt_number_br(float(kpis.get("ROAS", 0)), 2))
+    cols[0].metric("💰 Investimento Ads", fmt_money_br(float(kpis.get("Investimento Ads (R$)", 0))))
+    cols[1].metric("📈 Receita Ads", fmt_money_br(float(kpis.get("Receita Ads (R$)", 0))))
+    cols[2].metric("🎯 ROAS", fmt_number_br(float(kpis.get("ROAS", 0)), 2))
 
     tacos_val = float(kpis.get("TACOS", 0))
     tacos_pct = tacos_val * 100 if tacos_val <= 2 else tacos_val
-    cols[3].metric("TACOS", fmt_percent_br(tacos_pct))
+    cols[3].metric("📉 TACOS", fmt_percent_br(tacos_pct), delta_color="inverse")
+
+    st.divider()
+
+    # -------------------------
+    # Gráficos de Análise
+    # -------------------------
+    st.header("Análise Visual de Performance")
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        render_pareto_chart(camp_strat)
+    
+    with col_g2:
+        render_treemap_chart(camp_strat)
 
     st.divider()
 
@@ -497,22 +593,46 @@ def main():
     # Painel geral
     # Importante: ml_report espera "ACOS Objetivo" dentro do camp_strat
     # -------------------------
-    st.subheader("Painel geral")
-    panel_raw = ml.build_control_panel(camp_strat)
-    panel_raw = replace_acos_obj_with_roas_obj(panel_raw)
-    panel_view = prepare_df_for_view(panel_raw, drop_cpi_cols=True, drop_roas_generic=False)
-    st.dataframe(format_table_br(panel_view), use_container_width=True)
+    with st.expander("Painel Geral de Campanhas", expanded=True):
+        panel_raw = ml.build_control_panel(camp_strat)
+        panel_raw = replace_acos_obj_with_roas_obj(panel_raw)
+        panel_view = prepare_df_for_view(panel_raw, drop_cpi_cols=True, drop_roas_generic=False)
+        st.dataframe(format_table_br(panel_view), use_container_width=True)
 
     st.divider()
 
     # -------------------------
     # Matriz CPI
     # -------------------------
-    st.subheader("Matriz CPI")
-    cpi_raw = replace_acos_obj_with_roas_obj(camp_strat)
-    # Visao limpa (sem alterar calculos): esconder colunas auxiliares, remover duplicidades e alinhar ROAS/ACOS
-    cpi_view = prepare_df_for_view(cpi_raw, drop_cpi_cols=True, drop_roas_generic=True)
-    st.dataframe(format_table_br(cpi_view), use_container_width=True)
+    with st.expander("Matriz CPI (Oportunidades de Otimização)", expanded=False):
+        cpi_raw = replace_acos_obj_with_roas_obj(camp_strat)
+        # Visao limpa (sem alterar calculos): esconder colunas auxiliares, remover duplicidades e alinhar ROAS/ACOS
+        cpi_view = prepare_df_for_view(cpi_raw, drop_cpi_cols=True, drop_roas_generic=True)
+        st.dataframe(format_table_br(cpi_view), use_container_width=True)
+
+    st.divider()
+
+    # -------------------------
+    # Plano de Ação 15 Dias
+    # -------------------------
+    st.header("📅 Plano de Ação Estratégico (15 Dias)")
+    st.info("Este plano respeita a janela de 7 dias do algoritmo do Mercado Livre. Não faça alterações nas mesmas campanhas em intervalos menores que uma semana.")
+    
+    plan15 = ml.build_15_day_plan(camp_strat)
+    if not plan15.empty:
+        # Estilização básica para o plano
+        def color_fase(val):
+            if "Semana 1" in str(val): return "color: #3483fa; font-weight: bold"
+            if "Semana 2" in str(val): return "color: #ffe600; font-weight: bold"
+            return ""
+        
+        st.dataframe(
+            plan15.style.applymap(color_fase, subset=["Fase"]),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.write("Nenhuma ação necessária para o período atual.")
 
     st.divider()
 
@@ -530,25 +650,25 @@ def main():
 
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Pausar ou revisar")
+        st.subheader("🛑 Pausar ou revisar")
         st.dataframe(pause_fmt, use_container_width=True)
     with c2:
-        st.subheader("Entrar em Ads")
+        st.subheader("✅ Entrar em Ads")
         st.dataframe(enter_fmt, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        st.subheader("Escalar orçamento")
+        st.subheader("🚀 Escalar orçamento")
         st.dataframe(scale_fmt, use_container_width=True)
     with c4:
-        st.subheader("Baixar ROAS objetivo")
+        st.subheader("⬇️ Baixar ROAS objetivo")
         st.dataframe(acos_fmt, use_container_width=True)
 
     # -------------------------
     # Download Excel
     # Mantem dataframes originais para nao quebrar o gerar_excel do ml_report
     # -------------------------
-    st.subheader("Download Excel")
+    st.header("Download do Relatório Completo")
     try:
         excel_bytes = ml.gerar_excel(
             kpis=kpis,
@@ -571,6 +691,80 @@ def main():
     except Exception as e:
         st.error("Não consegui gerar o Excel.")
         st.exception(e)
+
+
+    st.divider()
+    
+    # -------------------------
+    # Snapshot para Comparativo
+    # -------------------------
+    st.header("📸 Snapshot para Comparativo")
+    st.info("Baixe um snapshot do estado atual das suas campanhas. Daqui a 15 dias, suba este arquivo junto com os novos relatorios para ver a evolucao.")
+    
+    try:
+        snapshot_data = camp_strat[["Nome", "ROAS_Real", "Investimento", "Receita", "Quadrante"]].copy()
+        snapshot_data["Data_Snapshot"] = datetime.now().strftime("%d/%m/%Y")
+        
+        snapshot_excel = ml.gerar_excel(
+            kpis=kpis,
+            camp_agg=camp_agg,
+            pause=pause,
+            enter=enter,
+            scale=scale,
+            acos=acos,
+            camp_strat=snapshot_data,
+            daily=None,
+        )
+        
+        st.download_button(
+            "Baixar Snapshot de Referencia",
+            data=snapshot_excel,
+            file_name=f"snapshot_referencia_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    except Exception as e:
+        st.error(f"Erro ao gerar Snapshot: {e}")
+    
+    # -------------------------
+    # Se snapshot foi enviado, mostrar comparativo
+    # -------------------------
+    if snapshot_file:
+        st.divider()
+        st.header("📈 Evolucao e Resultados")
+        st.success("Snapshot de referencia detectado! Analisando evolucao das campanhas...")
+        
+        try:
+            # Ler snapshot
+            snapshot_df = pd.read_excel(snapshot_file, sheet_name="Campanhas Estrategicas")
+            
+            # Comparar
+            comparison = ml.compare_snapshots(camp_strat, snapshot_df)
+            
+            if not comparison.empty:
+                # Exibir metricas de evolucao
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Campanhas Analisadas", len(comparison))
+                with col2:
+                    recuperadas = len(comparison[comparison["Evolucao_Status"] == "Recuperado"])
+                    st.metric("Recuperadas", recuperadas, delta=f"+{recuperadas}")
+                with col3:
+                    potencializadas = len(comparison[comparison["Evolucao_Status"] == "Potencializado"])
+                    st.metric("Potencializadas", potencializadas, delta=f"+{potencializadas}")
+                with col4:
+                    delta_roas_medio = comparison["Delta_ROAS"].mean()
+                    st.metric("Delta ROAS Medio", f"{delta_roas_medio:.2f}x", delta=f"{delta_roas_medio:+.2f}x")
+                
+                st.divider()
+                st.subheader("Tabela de Evolucao")
+                cols_view = ["Nome", "ROAS_Ref", "ROAS_Real", "Delta_ROAS", "Invest_Ref", "Investimento", "Delta_Invest", "Quadrante_Ref", "Quadrante", "Evolucao_Status"]
+                comparison_view = comparison[[c for c in cols_view if c in comparison.columns]].copy()
+                st.dataframe(format_table_br(comparison_view), use_container_width=True)
+            else:
+                st.warning("Nenhuma campanha em comum entre o snapshot e os dados atuais.")
+        except Exception as e:
+            st.error(f"Erro ao processar snapshot: {e}")
 
 
 if __name__ == "__main__":
